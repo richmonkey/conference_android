@@ -1,0 +1,70 @@
+apply plugin: 'com.android.application'
+
+android {
+    compileSdk rootProject.ext.compileSdk
+
+    namespace "com.beetle.conference"
+
+    defaultConfig {
+        applicationId "com.beetle.conference"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 10
+        versionName "1.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters 'armeabi-v7a', 'x86', "arm64-v8a"
+        }
+//        packagingOptions {
+//            // The project react-native does not provide 64-bit binaries at the
+//            // time of this writing. Unfortunately, packaging any 64-bit
+//            // binaries into the .apk will crash the app at runtime on 64-bit
+//            // platforms.
+//            exclude 'lib/x86_64/libjingle_peerconnection_so.so'
+//            exclude 'lib/arm64-v8a/libjingle_peerconnection_so.so'
+//        }
+    }
+
+    signingConfigs {
+        app {
+            storeFile file("gradle.keystore")
+            storePassword "gradle"
+            keyAlias "gradle"
+            keyPassword "gradle"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.app
+        }
+    }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
+
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+
+    testImplementation 'junit:junit:4.13.2'
+    // Required for instrumented tests
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:core:1.6.1'
+}
