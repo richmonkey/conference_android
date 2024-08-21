@@ -64,7 +64,7 @@ public class MediasoupTest {
             @Override
             public void perform(ConferenceActivity activity) {
                 //activity.move
-                //activityScenario.moveToState(Lifecycle.State.CREATED);
+                activityScenario.moveToState(Lifecycle.State.CREATED);
             }
         });
 

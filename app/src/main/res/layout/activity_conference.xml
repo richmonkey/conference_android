@@ -27,7 +27,7 @@
 
         <ImageButton
             android:id="@+id/mute"
-            android:onClick="toggleMic"
+            android:onClick="onMicrophone"
             android:layout_width="48dp"
             android:layout_height="48dp"
             android:layout_centerVertical="true"
@@ -60,7 +60,7 @@
 
         <ImageButton
             android:id="@+id/camera"
-            android:onClick="toggleCamera"
+            android:onClick="onCamera"
             android:layout_width="48dp"
             android:layout_height="48dp"
             android:layout_centerVertical="true"

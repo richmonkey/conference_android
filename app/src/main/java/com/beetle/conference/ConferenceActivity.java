@@ -28,7 +28,7 @@ import org.webrtc.VideoCapturer;
 
 import java.util.ArrayList;
 
-public class ConferenceActivity extends AppCompatActivity implements RoomClient.GetVideoRenderer, RoomClient.ReleaseVideoRenderer {
+public class ConferenceActivity extends RoomActivity {
     private static final String TAG = "ConferenceActivity";
 
     private static final int PERMISSIONS_REQUEST_CAMERA = 1;
@@ -40,8 +40,6 @@ public class ConferenceActivity extends AppCompatActivity implements RoomClient.
     protected long currentUID;
     protected String channelID;
     protected String token;
-
-    RoomClient roomClient;
 
 
     ArrayList<VideoRenderer> renderers = new ArrayList<>();
@@ -118,7 +116,7 @@ public class ConferenceActivity extends AppCompatActivity implements RoomClient.
         }
 
         headsetReceiver = new MusicIntentReceiver();
-        roomClient = new RoomClient(getApplicationContext(), this, this, token, "" + currentUID);
+        roomClient = new RoomClient(getApplicationContext(), this, token, "" + currentUID);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             int cameraPermission = (checkSelfPermission(Manifest.permission.CAMERA));
             int recordPermission = (checkSelfPermission(Manifest.permission.RECORD_AUDIO));
@@ -150,7 +148,12 @@ public class ConferenceActivity extends AppCompatActivity implements RoomClient.
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        roomClient.stop();
+        for (int i = 0; i < renderers.size(); i++) {
+            VideoRenderer renderer = renderers.get(i);
+            renderer.renderer.release();
+        }
+        renderers.clear();
+
         activityCount--;
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
@@ -174,43 +177,17 @@ public class ConferenceActivity extends AppCompatActivity implements RoomClient.
         return protooUrl;
     }
 
-    public void switchCamera(View view) {
-        VideoCapturer videoCapturer = roomClient.getVideoCapturer();
-        if (videoCapturer instanceof CameraVideoCapturer) {
-            if (videoCapturer == null) {
-                Log.e(TAG, "Failed to switch camera. ");
-                return; // No video is sent or only one camera is available or error happened.
-            }
-            Log.d(TAG, "Switch camera");
-            CameraVideoCapturer cameraVideoCapturer = (CameraVideoCapturer) videoCapturer;
-            cameraVideoCapturer.switchCamera(null);
-        } else {
-            Log.d(TAG, "Will not switch camera, video caputurer is not a camera");
-        }
-    }
     public void onHangup(View view) {
         Log.i(TAG, "hangup");
         this.finish();
     }
 
-    public void toggleCamera(View v) {
-        boolean cameraOn = !roomClient.isCameraOn();
-        if (cameraOn) {
-            roomClient.produceVideo();
-        } else {
-            roomClient.closeVideoProducer();
-        }
-        roomClient.setCameraOn(cameraOn);
+    public void onCamera(View v) {
+        toggleCamera();
     }
 
-    public void toggleMic(View view) {
-        boolean microphoneOn = !roomClient.isMicrophoneOn();
-        if (microphoneOn) {
-            roomClient.produceAudio();
-        } else {
-            roomClient.closeAudioProducer();
-        }
-        roomClient.setMicrophoneOn(microphoneOn);
+    public void onMicrophone(View view) {
+        toggleMic();
         ImageButton fab = findViewById(R.id.mute);
         if (microphoneOn) {
             fab.setImageDrawable(getResources().getDrawable(R.drawable.unmute, this.getTheme()));
@@ -257,13 +234,7 @@ public class ConferenceActivity extends AppCompatActivity implements RoomClient.
         int x = w*(renderers.size()%2);
         int y = h*(renderers.size()/2);
 
-        SurfaceViewRenderer render = new org.webrtc.SurfaceViewRenderer(this);
-        render.init(roomClient.getRootEglBase().getEglBaseContext(), null);
-        if (isLocal) {
-            render.setZOrderMediaOverlay(true);
-            render.setMirror(true);//default front camera
-            render.getHolder().setFormat(PixelFormat.TRANSPARENT);
-        }
+        SurfaceViewRenderer render = roomClient.createRenderer(this, isLocal);
 
         RelativeLayout ll = (RelativeLayout) findViewById(R.id.relativeLayout);
         RelativeLayout.LayoutParams lp = new RelativeLayout.LayoutParams(w, h);
@@ -275,7 +246,7 @@ public class ConferenceActivity extends AppCompatActivity implements RoomClient.
         View.OnClickListener listener = new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                switchCamera(view);
+                switchCamera();
             }
         };
 
@@ -296,10 +267,13 @@ public class ConferenceActivity extends AppCompatActivity implements RoomClient.
             }
         }
         VideoRenderer r = renderers.get(index);
-        renderers.remove(index);
-
         RelativeLayout ll = (RelativeLayout) findViewById(R.id.relativeLayout);
         ll.removeView(r.renderer);
+
+        renderers.remove(index);
+        r.renderer.release();
+        r.renderer = null;
+
 
         Display display = getWindowManager().getDefaultDisplay();
         Point size = new Point();
