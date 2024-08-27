@@ -1,6 +1,5 @@
 package com.beetle.conference;
 import android.util.Log;
-import android.view.WindowManager;
 
 import androidx.appcompat.app.AppCompatActivity;
 import org.webrtc.CameraVideoCapturer;
@@ -84,7 +83,8 @@ abstract public class RoomActivity extends AppCompatActivity implements RoomClie
             }
         }
         if (producer != null) {
-            roomClient.closeVideoProducer(producer);
+            producer.close();
+            roomClient.closeProducer(producer);
             producers.remove(producer);
             removeRenderer("local");
             cameraOn = false;
@@ -117,7 +117,8 @@ abstract public class RoomActivity extends AppCompatActivity implements RoomClie
         }
 
         if (producer != null) {
-            roomClient.closeAudioProducer(producer);
+            producer.close();
+            roomClient.closeProducer(producer);
             producers.remove(producer);
             microphoneOn = false;
         } else {
@@ -197,7 +198,7 @@ abstract public class RoomActivity extends AppCompatActivity implements RoomClie
 
     void produceVideo() {
         SurfaceViewRenderer renderer = createRenderer("local", true);
-        roomClient.produceVideo(renderer, new RoomClient.ProduceCallback() {
+        roomClient.produceVideo(this.getApplicationContext(), renderer, new RoomClient.ProduceCallback() {
             @Override
             public void onSuccess(RoomClient.Producer producer) {
                 producers.add(producer);
@@ -212,7 +213,7 @@ abstract public class RoomActivity extends AppCompatActivity implements RoomClie
     }
 
     void produceAudio() {
-        roomClient.produceAudio(new RoomClient.ProduceCallback() {
+        roomClient.produceAudio(this.getApplicationContext(), new RoomClient.ProduceCallback() {
             @Override
             public void onSuccess(RoomClient.Producer producer) {
                 producers.add(producer);
