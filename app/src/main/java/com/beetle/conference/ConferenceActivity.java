@@ -172,8 +172,8 @@ public class ConferenceActivity extends RoomActivity {
     }
 
     String getProtooUrl() {
-        //String protooUrl = "ws://192.168.1.101:4444/?peerId="+this.currentUID + "&roomId=" +this.channelID + "&mode=group";
-        String protooUrl = "wss://jitsi.gobelieve.io/room?peerId=" + this.currentUID + "&roomId=" +this.channelID + "&mode=group";
+        String protooUrl = "ws://192.168.1.111:4445/?peerId="+this.currentUID + "&roomId=" +this.channelID + "&mode=group";
+        //String protooUrl = "wss://jitsi.gobelieve.io/room?peerId=" + this.currentUID + "&roomId=" +this.channelID + "&mode=group";
         return protooUrl;
     }
 
