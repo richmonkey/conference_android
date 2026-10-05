@@ -20,6 +20,7 @@ import org.webrtc.PeerConnectionFactory;
 import org.webrtc.RtpParameters;
 import org.webrtc.SurfaceViewRenderer;
 import org.webrtc.VideoSink;
+import org.webrtc.VideoTrack;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -146,6 +147,9 @@ public class RoomClient {
     /** Releases resources owned by the current Peer connection but keeps automatic reconnection possible. */
     private void releaseRoomResources() {
         for (Producer producer : producers) {
+            if (producer.kind.equals("video")) {
+                videoRendererDelegate.removeRenderer("local");
+            }
             producer.close();
         }
         producers.clear();
@@ -153,6 +157,9 @@ public class RoomClient {
         consumers.forEach(new BiConsumer<String, Consumer>() {
             @Override
             public void accept(String s, Consumer consumer) {
+                if (consumer.kind.equals("video")) {
+                    videoRendererDelegate.removeRenderer(consumer.id);
+                }
                 consumer.close();
             }
         });
@@ -216,12 +223,7 @@ public class RoomClient {
             return;
         }
         observer.onDisconnect();
-        videoRendererDelegate.removeRenderer("local");
-        consumers.forEach((id, consumer) -> {
-            if (consumer.kind.equals("video")) {
-                videoRendererDelegate.removeRenderer(consumer.id);
-            }
-        });
+
         releaseRoomResources();
     }
 
@@ -242,7 +244,7 @@ public class RoomClient {
         if (transitionTo(RoomSessionState.FAILED, RoomSessionState.CONNECTING,
                 RoomSessionState.RECONNECTING, RoomSessionState.AUTHENTICATING, RoomSessionState.CREATING_TRANSPORTS,
                 RoomSessionState.JOINING, RoomSessionState.JOINED)) {
-            observer.onDisconnect();
+            observer.onError();
             releaseAllResources();
         }
     }
@@ -753,6 +755,11 @@ public class RoomClient {
                         Consumer consumer = new Consumer(id, recvResult.localId, producerId,
                                 recvResult.rtpReceiver, recvResult.track, rtpParameters,
                                 kind, peerId, recvTransport);
+                        if (consumer.kind.equals("video")) {
+                            VideoTrack track = (VideoTrack)consumer.getTrack();
+                            VideoSink renderer = videoRendererDelegate.createRenderer(consumer.id, false);
+                            track.addSink(renderer);
+                        }
                         consumers.put(id, consumer);
                         resumeConsumer(consumer);
 

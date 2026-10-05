@@ -68,6 +68,11 @@ abstract public class RoomActivity extends AppCompatActivity implements RoomClie
     }
 
     @Override
+    public void onError() {
+        Log.e(TAG, "on room client error");
+    }
+
+    @Override
     public void onDisconnect() {
         peers.clear();
     }
