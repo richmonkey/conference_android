@@ -3,7 +3,6 @@ package com.beetle.conference.room;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
-import android.graphics.PixelFormat;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -16,29 +15,11 @@ import org.mediasoup.MediaSoupClient;
 import org.mediasoup.RecvTransport;
 import org.mediasoup.SendTransport;
 import org.mediasoup.Transport;
-import org.webrtc.AudioSource;
-import org.webrtc.AudioTrack;
-import org.webrtc.Camera1Enumerator;
-import org.webrtc.Camera2Enumerator;
-import org.webrtc.CameraEnumerator;
-import org.webrtc.CameraVideoCapturer;
-import org.webrtc.DefaultVideoDecoderFactory;
-import org.webrtc.DefaultVideoEncoderFactory;
 import org.webrtc.EglBase;
-import org.webrtc.MediaConstraints;
-import org.webrtc.PeerConnection;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.RtpParameters;
-import org.webrtc.SurfaceTextureHelper;
 import org.webrtc.SurfaceViewRenderer;
-import org.webrtc.VideoCapturer;
-import org.webrtc.VideoDecoderFactory;
-import org.webrtc.VideoEncoderFactory;
 import org.webrtc.VideoSink;
-import org.webrtc.VideoSource;
-import org.webrtc.VideoTrack;
-import org.webrtc.audio.AudioDeviceModule;
-import org.webrtc.audio.JavaAudioDeviceModule;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -61,10 +42,8 @@ public class RoomClient {
     final String token;
     final String displayName;
 
-    PeerConnection.RTCConfiguration rtcConfig;
-    EglBase rootEglBase;
-    SurfaceTextureHelper surfaceTextureHelper;
-    PeerConnectionFactory pcFactory;
+    WebRtcRuntime webRtcRuntime;
+    LocalMediaController localMediaController;
     Device device;
     SendTransport sendTransport;
     RecvTransport recvTransport;
@@ -115,29 +94,14 @@ public class RoomClient {
 
         Log.i(TAG, "mediasoup version:" + MediaSoupClient.version());
 
-        rootEglBase = EglBase.create();
-        surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", rootEglBase.getEglBaseContext());
-
-        PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
-        pcFactory = createPeerConnectionFactory(options, rootEglBase, appContext);
-
-
-        rtcConfig = new PeerConnection.RTCConfiguration(new ArrayList<>());
-        // TCP candidates are only useful when connecting to a server that supports
-        // ICE-TCP.
-        rtcConfig.tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED;
-        rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE;
-        rtcConfig.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE;
-        rtcConfig.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY;
-        // Use ECDSA encryption.
-        rtcConfig.keyType = PeerConnection.KeyType.ECDSA;
-        rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
+        webRtcRuntime = new WebRtcRuntime(appContext);
+        localMediaController = new LocalMediaController(webRtcRuntime);
 
         handler = new Handler(Looper.myLooper());
     }
 
     public EglBase getRootEglBase() {
-        return rootEglBase;
+        return webRtcRuntime.getRootEglBase();
     }
 
 
@@ -152,6 +116,11 @@ public class RoomClient {
             peer.close();
             peer = null;
         }
+
+        for (Producer producer : producers) {
+            producer.close();
+        }
+        producers.clear();
 
         consumers.forEach(new BiConsumer<String, Consumer>() {
             @Override
@@ -169,17 +138,10 @@ public class RoomClient {
             recvTransport.close();
             recvTransport = null;
         }
-        if (pcFactory != null) {
-            pcFactory.dispose();
-            pcFactory = null;
-        }
-        if (surfaceTextureHelper != null) {
-            surfaceTextureHelper.dispose();
-            surfaceTextureHelper = null;
-        }
-        if (rootEglBase != null) {
-            rootEglBase.release();
-            rootEglBase = null;
+        if (webRtcRuntime != null) {
+            webRtcRuntime.release();
+            webRtcRuntime = null;
+            localMediaController = null;
         }
     }
 
@@ -207,14 +169,7 @@ public class RoomClient {
     }
 
     public SurfaceViewRenderer createRenderer(Context context, boolean isLocal) {
-        SurfaceViewRenderer render = new org.webrtc.SurfaceViewRenderer(context);
-        render.init(getRootEglBase().getEglBaseContext(), null);
-        if (isLocal) {
-            render.setZOrderMediaOverlay(true);
-            render.setMirror(true);//default front camera
-            render.getHolder().setFormat(PixelFormat.TRANSPARENT);
-        }
-        return render;
+        return webRtcRuntime.createRenderer(context, isLocal);
     }
 
     private void getRouterRtpCapabilities() {
@@ -254,7 +209,8 @@ public class RoomClient {
                         Log.i(TAG, "iceCandidates:" + iceCandidates);
                         Log.i(TAG, "dtlsParameters:" + dtlsParameters);
 
-                        sendTransport = device.createSendTransport(id, iceParameters.toString(), iceCandidates.toString(), dtlsParameters.toString(), rtcConfig, pcFactory);
+                        sendTransport = device.createSendTransport(id, iceParameters.toString(), iceCandidates.toString(), dtlsParameters.toString(),
+                                webRtcRuntime.getRtcConfiguration(), webRtcRuntime.getPeerConnectionFactory());
 
                         connectTransport(sendTransport, "server", new ResponseHandler() {
                             @Override
@@ -303,7 +259,8 @@ public class RoomClient {
                         Object iceParameters = object.get("iceParameters");
                         Object iceCandidates = object.get("iceCandidates");
                         Object dtlsParameters = object.get("dtlsParameters");
-                        recvTransport = device.createRecvTransport(id, iceParameters.toString(), iceCandidates.toString(), dtlsParameters.toString(), rtcConfig, pcFactory);
+                        recvTransport = device.createRecvTransport(id, iceParameters.toString(), iceCandidates.toString(), dtlsParameters.toString(),
+                                webRtcRuntime.getRtcConfiguration(), webRtcRuntime.getPeerConnectionFactory());
                         connectTransport(recvTransport, "client", new ResponseHandler() {
                             @Override
                             public void onSuccess(Response resp) {
@@ -434,10 +391,8 @@ public class RoomClient {
         }
 
         VideoSink renderer = videoRendererDelegate.createRenderer("local", true);
-        VideoSource videoSource = pcFactory.createVideoSource(false);
-        VideoTrack videoTrack = createVideoTrack(videoSource, renderer);
-        VideoCapturer videoCapturer = createVideoCapturer(videoSource, appContext);
-        if (videoCapturer == null) {
+        LocalVideoMedia videoMedia = localMediaController.createVideo(appContext, renderer);
+        if (videoMedia == null) {
             Log.w(TAG, "Create video capturer failure.");
             cb.onError();
             return;
@@ -448,13 +403,8 @@ public class RoomClient {
             codecOptions.put("videoGoogleStartBitrate", 1000);
 
             List<RtpParameters.Encoding> encodings = new ArrayList<>();
-            SendTransport.SendResult sendResult = sendTransport.produce(videoTrack, encodings, codecOptions.toString(), null);
+            SendTransport.SendResult sendResult = sendTransport.produce(videoMedia.getTrack(), encodings, codecOptions.toString(), null);
             JSONObject rtpParameters = new JSONObject(sendResult.rtpParameters);
-
-            int videoWidth = 640;
-            int videoHeight = 480;
-            int videoFps = 30;
-            videoCapturer.startCapture(videoWidth, videoHeight, videoFps);
 
             JSONObject object = new JSONObject();
             object.put("transportId", sendTransport.getId());
@@ -470,8 +420,7 @@ public class RoomClient {
                         String id = object.getString("id");
 
                         Producer producer = new Producer(id, sendResult.localId, sendResult.rtpSender,
-                                sendResult.rtpSender.track(), rtpParameters, "video",
-                                videoSource, videoCapturer, sendTransport);
+                                videoMedia, rtpParameters, "video", sendTransport);
                         cb.onSuccess(producer);
                         producers.add(producer);
                     } catch(JSONException e) {
@@ -506,16 +455,14 @@ public class RoomClient {
             return;
         }
 
-        AudioSource audioSource = createAudioSource();
-        AudioTrack audioTrack = createAudioTrack(audioSource);
-        audioTrack.setEnabled(!muted);
+        LocalAudioMedia audioMedia = localMediaController.createAudio(muted);
         try {
             JSONObject codecOptions = new JSONObject();
             codecOptions.put("opusStereo", true);
             codecOptions.put("opusDtx", true);
 
             List<RtpParameters.Encoding> encodings = new ArrayList<>();
-            SendTransport.SendResult sendResult = sendTransport.produce(audioTrack, encodings, codecOptions.toString(), null);
+            SendTransport.SendResult sendResult = sendTransport.produce(audioMedia.getTrack(), encodings, codecOptions.toString(), null);
             JSONObject rtpParameters = new JSONObject(sendResult.rtpParameters);
             JSONObject object = new JSONObject();
             object.put("transportId", sendTransport.getId());
@@ -529,8 +476,8 @@ public class RoomClient {
                         JSONObject object = new JSONObject(resp.getData());
                         String id = object.getString("id");
                         Producer producer = new Producer(id, sendResult.localId,
-                                sendResult.rtpSender, sendResult.rtpSender.track(), rtpParameters,
-                                "audio", audioSource, sendTransport);
+                                sendResult.rtpSender, audioMedia, rtpParameters,
+                                "audio", sendTransport);
                         cb.onSuccess(producer);
                         producers.add(producer);
                     } catch(JSONException e) {
@@ -562,23 +509,13 @@ public class RoomClient {
             return false;
         }
 
-        VideoCapturer videoCapturer = producer.getVideoCapturer();
-        if (videoCapturer instanceof CameraVideoCapturer) {
-            Log.d(TAG, "Switch camera");
-            CameraVideoCapturer cameraVideoCapturer = (CameraVideoCapturer) videoCapturer;
-            cameraVideoCapturer.switchCamera(null);
-            return true;
-        } else {
-            Log.d(TAG, "Will not switch camera, video caputurer is not a camera");
-            return false;
-        }
+        return localMediaController.switchCamera(producer.getLocalMedia());
     }
 
     public void applyMute(boolean muted) {
         Producer producer = findProducer("audio");
         if (producer != null) {
-            AudioTrack track = (AudioTrack) producer.getTrack();
-            track.setEnabled(!muted);
+            localMediaController.setMuted(producer.getLocalMedia(), muted);
         }
     }
 
@@ -716,20 +653,9 @@ public class RoomClient {
     }
 
     private void loadDevice(String routerRtpCaps) {
-        PeerConnection.RTCConfiguration rtcConfig =
-                new PeerConnection.RTCConfiguration(new ArrayList<>());
-        // TCP candidates are only useful when connecting to a server that supports
-        // ICE-TCP.
-        rtcConfig.tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED;
-        rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE;
-        rtcConfig.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE;
-        rtcConfig.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY;
-        // Use ECDSA encryption.
-        rtcConfig.keyType = PeerConnection.KeyType.ECDSA;
-        rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
-
         device = new Device();
-        device.load(routerRtpCaps, rtcConfig, pcFactory);
+        device.load(routerRtpCaps, webRtcRuntime.getRtcConfiguration(),
+                webRtcRuntime.getPeerConnectionFactory());
     }
 
     private void request(String method, ResponseHandler handler) {
@@ -759,134 +685,4 @@ public class RoomClient {
         return nextId;
     }
 
-    public PeerConnectionFactory createPeerConnectionFactory(PeerConnectionFactory.Options options, EglBase rootEglBase, Context appContext) {
-        AudioDeviceModule adm = createJavaAudioDevice(appContext);
-        // Create peer connection factory.
-        if (options != null) {
-            Log.d(TAG, "Factory networkIgnoreMask option: " + options.networkIgnoreMask);
-        }
-        final boolean enableH264HighProfile = true;
-        final boolean enableIntelVp8Encoder = true;
-        final VideoEncoderFactory encoderFactory;
-        final VideoDecoderFactory decoderFactory;
-
-        encoderFactory = new DefaultVideoEncoderFactory(
-                rootEglBase.getEglBaseContext(), enableIntelVp8Encoder, enableH264HighProfile);
-        decoderFactory = new DefaultVideoDecoderFactory(rootEglBase.getEglBaseContext());
-
-        PeerConnectionFactory factory = PeerConnectionFactory.builder()
-                .setOptions(options)
-                .setAudioDeviceModule(adm)
-                .setVideoEncoderFactory(encoderFactory)
-                .setVideoDecoderFactory(decoderFactory)
-                .createPeerConnectionFactory();
-        Log.d(TAG, "Peer connection factory created.");
-        adm.release();
-
-        Log.d(TAG, "Peer connection factory created.");
-        return factory;
-    }
-
-
-    AudioDeviceModule createJavaAudioDevice(Context appContext) {
-        JavaAudioDeviceModule.AudioTrackErrorCallback audioTrackErrorCallback = new JavaAudioDeviceModule.AudioTrackErrorCallback() {
-            @Override
-            public void onWebRtcAudioTrackInitError(String errorMessage) {
-                Log.e(TAG, "onWebRtcAudioTrackInitError: " + errorMessage);
-                reportError(errorMessage);
-            }
-
-            @Override
-            public void onWebRtcAudioTrackStartError(
-                    JavaAudioDeviceModule.AudioTrackStartErrorCode errorCode, String errorMessage) {
-                Log.e(TAG, "onWebRtcAudioTrackStartError: " + errorCode + ". " + errorMessage);
-                reportError(errorMessage);
-            }
-
-            @Override
-            public void onWebRtcAudioTrackError(String errorMessage) {
-                Log.e(TAG, "onWebRtcAudioTrackError: " + errorMessage);
-                reportError(errorMessage);
-            }
-        };
-
-        return JavaAudioDeviceModule.builder(appContext)
-                .setAudioTrackErrorCallback(audioTrackErrorCallback)
-                .createAudioDeviceModule();
-    }
-
-    private VideoCapturer createVideoCapturer(VideoSource videoSource, Context appContext) {
-        VideoCapturer videoCapturer = null;
-        if (useCamera2(appContext)) {
-            Log.d(TAG, "Creating capturer using camera2 API.");
-            videoCapturer = createCameraCapturer(new Camera2Enumerator(appContext));
-        } else {
-            Log.d(TAG, "Creating capturer using camera1 API.");
-            videoCapturer = createCameraCapturer(new Camera1Enumerator(true));
-        }
-        if (videoCapturer == null) {
-            reportError("Failed to open camera");
-            return null;
-        }
-        videoCapturer.initialize(surfaceTextureHelper, appContext, videoSource.getCapturerObserver());
-        return videoCapturer;
-    }
-
-    private boolean useCamera2(Context appContext) {
-        return Camera2Enumerator.isSupported(appContext);
-    }
-
-    private VideoCapturer createCameraCapturer(CameraEnumerator enumerator) {
-        final String[] deviceNames = enumerator.getDeviceNames();
-
-        // First, try to find front facing camera
-        Log.d(TAG, "Looking for front facing cameras.");
-        for (String deviceName : deviceNames) {
-            if (enumerator.isFrontFacing(deviceName)) {
-                Log.d(TAG, "Creating front facing camera capturer.");
-                VideoCapturer videoCapturer = enumerator.createCapturer(deviceName, null);
-
-                if (videoCapturer != null) {
-                    return videoCapturer;
-                }
-            }
-        }
-
-        // Front facing camera not found, try something else
-        Log.d(TAG, "Looking for other cameras.");
-        for (String deviceName : deviceNames) {
-            if (!enumerator.isFrontFacing(deviceName)) {
-                Log.d(TAG, "Creating other camera capturer.");
-                VideoCapturer videoCapturer = enumerator.createCapturer(deviceName, null);
-
-                if (videoCapturer != null) {
-                    return videoCapturer;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private VideoTrack createVideoTrack(VideoSource videoSource, VideoSink localRender) {
-        VideoTrack localVideoTrack = pcFactory.createVideoTrack(VIDEO_TRACK_ID, videoSource);
-        localVideoTrack.setEnabled(true);
-        if (localRender != null) {
-            localVideoTrack.addSink(localRender);
-        }
-        return localVideoTrack;
-    }
-
-    private AudioSource createAudioSource() {
-        MediaConstraints audioConstraints = new MediaConstraints();
-        return pcFactory.createAudioSource(audioConstraints);
-    }
-
-    private AudioTrack createAudioTrack(AudioSource audioSource) {
-        return pcFactory.createAudioTrack(AUDIO_TRACK_ID, audioSource);
-    }
-
-    private void reportError(final String errorMessage) {
-        Log.e(TAG, "peer connection error: " + errorMessage);
-    }
 }
