@@ -23,5 +23,7 @@ android {
 dependencies {
     // Android Gradle Plugin cannot package direct local AARs into a library AAR.
     // The app supplies these runtime dependencies from this module's libs directory.
-    compileOnly fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
+    api files("libs/libwebrtc.aar")
+
+    implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'], excludes: ["libwebrtc.aar"])
 }
