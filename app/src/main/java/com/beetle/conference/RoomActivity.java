@@ -14,6 +14,9 @@ abstract public class RoomActivity extends AppCompatActivity implements RoomClie
 
     protected boolean cameraOn = true;
     protected boolean microphoneOn = true;
+
+    protected boolean muted = false;
+
     protected RoomClient roomClient;
 
     @Override
@@ -109,7 +112,7 @@ abstract public class RoomActivity extends AppCompatActivity implements RoomClie
     }
 
     void produceAudio() {
-        roomClient.produceAudio(this.getApplicationContext(), new RoomClient.ProduceCallback() {
+        roomClient.produceAudio(this.getApplicationContext(), muted, new RoomClient.ProduceCallback() {
             @Override
             public void onSuccess(RoomClient.Producer producer) {
 

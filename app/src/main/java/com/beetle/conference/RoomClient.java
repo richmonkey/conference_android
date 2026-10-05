@@ -81,18 +81,13 @@ public class RoomClient {
 
     Handler handler;
 
-    protected boolean cameraOn = true;
-    protected boolean microphoneOn = true;
-
-    boolean muted = false;
-
     HashMap<Long, PendingRequest> pendingRequests = new HashMap<>();
 
     HashMap<String, Consumer> consumers = new HashMap<>();
 
     ArrayList<RoomClient.Producer> producers = new ArrayList<>();
 
-    VideoRendererDelegate videoRendererDelegate;
+    final VideoRendererDelegate videoRendererDelegate;
     //final Context appContext;
 
     final RoomClientObserver observer;
@@ -420,12 +415,14 @@ public class RoomClient {
 
     public RoomClient(Context appContext,
                       RoomClientObserver observer,
+                      VideoRendererDelegate videoRendererDelegate,
                       String token,
                       String displayName) {
         this.token = token;
         this.displayName = displayName;
 
         this.observer = observer;
+        this.videoRendererDelegate = videoRendererDelegate;
 
         if (predicate.getAndIncrement()==0) {
             Log.d(TAG, "Initialize WebRTC");
@@ -772,10 +769,7 @@ public class RoomClient {
 
             List<RtpParameters.Encoding> encodings = new ArrayList<>();
             SendTransport.SendResult sendResult = sendTransport.produce(videoTrack, encodings, codecOptions.toString(), null);
-
             JSONObject rtpParameters = new JSONObject(sendResult.rtpParameters);
-
-
 
             int videoWidth = 640;
             int videoHeight = 480;
@@ -818,7 +812,7 @@ public class RoomClient {
 
     }
 
-    public void produceAudio(Context appContext, ProduceCallback cb) {
+    public void produceAudio(Context appContext, boolean muted, ProduceCallback cb) {
         if (!device.canProduce("audio")) {
             Log.w(TAG, "Device can't produce audio");
             cb.onError();
@@ -834,7 +828,7 @@ public class RoomClient {
 
         AudioSource audioSource = createAudioSource();
         AudioTrack audioTrack = createAudioTrack(audioSource);
-
+        audioTrack.setEnabled(!muted);
         try {
             JSONObject codecOptions = new JSONObject();
             codecOptions.put("opusStereo", true);
@@ -897,6 +891,14 @@ public class RoomClient {
         } else {
             Log.d(TAG, "Will not switch camera, video caputurer is not a camera");
             return false;
+        }
+    }
+
+    public void applyMute(boolean muted) {
+        Producer producer = findProducer("audio");
+        if (producer != null) {
+            AudioTrack track = (AudioTrack) producer.track;
+            track.setEnabled(!muted);
         }
     }
 

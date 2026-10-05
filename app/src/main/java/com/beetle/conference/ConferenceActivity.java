@@ -109,7 +109,7 @@ public class ConferenceActivity extends RoomActivity {
         }
 
         headsetReceiver = new MusicIntentReceiver();
-        roomClient = new RoomClient(getApplicationContext(), this, token, "" + currentUID);
+        roomClient = new RoomClient(getApplicationContext(), this, this, token, "" + currentUID);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             int cameraPermission = (checkSelfPermission(Manifest.permission.CAMERA));
             int recordPermission = (checkSelfPermission(Manifest.permission.RECORD_AUDIO));
