@@ -34,6 +34,7 @@ import org.webrtc.SurfaceViewRenderer;
 import org.webrtc.VideoCapturer;
 import org.webrtc.VideoDecoderFactory;
 import org.webrtc.VideoEncoderFactory;
+import org.webrtc.VideoSink;
 import org.webrtc.VideoSource;
 import org.webrtc.VideoTrack;
 import org.webrtc.audio.AudioDeviceModule;
@@ -432,7 +433,7 @@ public class RoomClient {
             return;
         }
 
-        SurfaceViewRenderer renderer = videoRendererDelegate.createRenderer("local", true);
+        VideoSink renderer = videoRendererDelegate.createRenderer("local", true);
         VideoSource videoSource = pcFactory.createVideoSource(false);
         VideoTrack videoTrack = createVideoTrack(videoSource, renderer);
         VideoCapturer videoCapturer = createVideoCapturer(videoSource, appContext);
@@ -867,7 +868,7 @@ public class RoomClient {
         return null;
     }
 
-    private VideoTrack createVideoTrack(VideoSource videoSource, SurfaceViewRenderer localRender) {
+    private VideoTrack createVideoTrack(VideoSource videoSource, VideoSink localRender) {
         VideoTrack localVideoTrack = pcFactory.createVideoTrack(VIDEO_TRACK_ID, videoSource);
         localVideoTrack.setEnabled(true);
         if (localRender != null) {
