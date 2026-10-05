@@ -11,12 +11,10 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.mediasoup.Device;
 import org.mediasoup.Fingerprint;
-import org.mediasoup.MediaSoupClient;
 import org.mediasoup.RecvTransport;
 import org.mediasoup.SendTransport;
 import org.mediasoup.Transport;
 import org.webrtc.EglBase;
-import org.webrtc.PeerConnectionFactory;
 import org.webrtc.RtpParameters;
 import org.webrtc.SurfaceViewRenderer;
 import org.webrtc.VideoSink;
@@ -25,7 +23,6 @@ import org.webrtc.VideoTrack;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 
 import protooclient.Peer;
@@ -37,8 +34,6 @@ public class RoomClient {
     static final String TAG = "RoomActivity";
     public static final String VIDEO_TRACK_ID = "ARDAMSv0";
     public static final String AUDIO_TRACK_ID = "ARDAMSa0";
-
-    static AtomicInteger predicate = new AtomicInteger();
 
     final String token;
     final String displayName;
@@ -93,16 +88,7 @@ public class RoomClient {
         this.observer = observer;
         this.videoRendererDelegate = videoRendererDelegate;
 
-        if (predicate.getAndIncrement()==0) {
-            Log.d(TAG, "Initialize WebRTC");
-            PeerConnectionFactory.initialize(
-                    PeerConnectionFactory.InitializationOptions.builder(appContext)
-                            .createInitializationOptions());
-
-            MediaSoupClient.initialize();
-        }
-
-        Log.i(TAG, "mediasoup version:" + MediaSoupClient.version());
+        RoomSdk.requireInitialized();
 
         webRtcRuntime = new WebRtcRuntime(appContext);
         localMediaController = new LocalMediaController(webRtcRuntime, config.getVideoCapture());
