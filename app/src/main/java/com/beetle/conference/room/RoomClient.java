@@ -48,8 +48,7 @@ public class RoomClient {
     SendTransport sendTransport;
     RecvTransport recvTransport;
 
-    //Ready after send&recv transport created.
-    boolean initialized = false;
+    private volatile RoomSessionState sessionState = RoomSessionState.IDLE;
 
     int nextId;
     Peer peer;
@@ -63,10 +62,8 @@ public class RoomClient {
     ArrayList<Producer> producers = new ArrayList<>();
 
     final VideoRendererDelegate videoRendererDelegate;
-    //final Context appContext;
 
     final RoomClientObserver observer;
-
 
     /*
      * Peer callbacks live in RoomPeerListener so the signaling adapter remains
@@ -104,19 +101,50 @@ public class RoomClient {
         return webRtcRuntime.getRootEglBase();
     }
 
+    public RoomSessionState getSessionState() {
+        return sessionState;
+    }
 
     public void start(String protooUrl) {
+        if (!transitionTo(RoomSessionState.CONNECTING, RoomSessionState.IDLE)) {
+            Log.w(TAG, "Ignoring start in state " + sessionState);
+            return;
+        }
         Log.i(TAG, "open peer");
-        peer = new Peer(protooUrl, new RoomPeerListener(this));
-        peer.open();
+        try {
+            peer = new Peer(protooUrl, new RoomPeerListener(this));
+            peer.open();
+        } catch (RuntimeException e) {
+            failSession("open peer", e);
+        }
     }
 
     public void stop() {
+        if (sessionState == RoomSessionState.CLOSED || sessionState == RoomSessionState.CLOSING) {
+            return;
+        }
+        transitionTo(RoomSessionState.CLOSING, RoomSessionState.IDLE, RoomSessionState.CONNECTING,
+                RoomSessionState.RECONNECTING, RoomSessionState.AUTHENTICATING, RoomSessionState.CREATING_TRANSPORTS,
+                RoomSessionState.JOINING, RoomSessionState.JOINED, RoomSessionState.FAILED);
+        releaseAllResources();
+        transitionTo(RoomSessionState.CLOSED, RoomSessionState.CLOSING);
+    }
+
+    private void releaseAllResources() {
         if (peer != null) {
             peer.close();
             peer = null;
         }
+        releaseRoomResources();
+        if (webRtcRuntime != null) {
+            webRtcRuntime.release();
+            webRtcRuntime = null;
+            localMediaController = null;
+        }
+    }
 
+    /** Releases resources owned by the current Peer connection but keeps automatic reconnection possible. */
+    private void releaseRoomResources() {
         for (Producer producer : producers) {
             producer.close();
         }
@@ -138,33 +166,114 @@ public class RoomClient {
             recvTransport.close();
             recvTransport = null;
         }
-        if (webRtcRuntime != null) {
-            webRtcRuntime.release();
-            webRtcRuntime = null;
-            localMediaController = null;
+        if (device != null) {
+            device.dispose();
+            device = null;
+        }
+        pendingRequests.clear();
+        nextId = 0;
+    }
+
+    private synchronized boolean transitionTo(RoomSessionState target,
+                                              RoomSessionState... allowedSources) {
+        for (RoomSessionState allowedSource : allowedSources) {
+            if (sessionState == allowedSource) {
+                Log.i(TAG, "Room session state: " + sessionState + " -> " + target);
+                sessionState = target;
+                return true;
+            }
+        }
+        Log.w(TAG, "Ignoring invalid room session transition: " + sessionState + " -> " + target);
+        return false;
+    }
+
+    private boolean isInState(RoomSessionState expected) {
+        return sessionState == expected;
+    }
+
+    void handlePeerOpened() {
+        if (!transitionTo(RoomSessionState.AUTHENTICATING, RoomSessionState.CONNECTING,
+                RoomSessionState.RECONNECTING)) {
+            return;
+        }
+        resetNextId();
+        observer.onConnect();
+        auth();
+    }
+
+    void handlePeerClosed() {
+        observer.onClose();
+    }
+
+    void handlePeerDisconnected() {
+        if (sessionState == RoomSessionState.CLOSED || sessionState == RoomSessionState.CLOSING
+                || sessionState == RoomSessionState.FAILED) {
+            return;
+        }
+        if (!transitionTo(RoomSessionState.RECONNECTING, RoomSessionState.CONNECTING,
+                RoomSessionState.AUTHENTICATING, RoomSessionState.CREATING_TRANSPORTS,
+                RoomSessionState.JOINING, RoomSessionState.JOINED)) {
+            return;
+        }
+        observer.onDisconnect();
+        videoRendererDelegate.removeRenderer("local");
+        consumers.forEach((id, consumer) -> {
+            if (consumer.kind.equals("video")) {
+                videoRendererDelegate.removeRenderer(consumer.id);
+            }
+        });
+        releaseRoomResources();
+    }
+
+    void handlePeerFailed() {
+        Log.w(TAG, "Peer connection attempt failed; waiting for automatic reconnect");
+        transitionTo(RoomSessionState.RECONNECTING, RoomSessionState.CONNECTING);
+    }
+
+    private void failSession(String operation, Exception exception) {
+        if (sessionState == RoomSessionState.CLOSED || sessionState == RoomSessionState.CLOSING) {
+            return;
+        }
+        if (exception == null) {
+            Log.e(TAG, "Room session failed: " + operation);
+        } else {
+            Log.e(TAG, "Room session failed: " + operation, exception);
+        }
+        if (transitionTo(RoomSessionState.FAILED, RoomSessionState.CONNECTING,
+                RoomSessionState.RECONNECTING, RoomSessionState.AUTHENTICATING, RoomSessionState.CREATING_TRANSPORTS,
+                RoomSessionState.JOINING, RoomSessionState.JOINED)) {
+            observer.onDisconnect();
+            releaseAllResources();
         }
     }
 
     void auth() {
+        if (!isInState(RoomSessionState.AUTHENTICATING)) {
+            return;
+        }
         try {
             JSONObject j = new JSONObject();
             j.put("token", token);
             this.request("auth", j, new ResponseHandler() {
                 @Override
                 public void onSuccess(Response resp) {
+                    if (!transitionTo(RoomSessionState.CREATING_TRANSPORTS,
+                            RoomSessionState.AUTHENTICATING)) {
+                        return;
+                    }
                     Log.i(TAG, "auth success");
                     getRouterRtpCapabilities();
                 }
 
                 @Override
                 public void onError(Response resp) {
-
+                    failSession("authenticate", null);
                 }
 
 
             });
         } catch (Exception e) {
-            e.printStackTrace();
+            failSession("prepare authentication", e);
         }
     }
 
@@ -173,21 +282,30 @@ public class RoomClient {
     }
 
     private void getRouterRtpCapabilities() {
+        if (!isInState(RoomSessionState.CREATING_TRANSPORTS)) {
+            return;
+        }
         request("getRouterRtpCapabilities", new ResponseHandler() {
             @Override
             public void onSuccess(Response resp) {
+                if (!isInState(RoomSessionState.CREATING_TRANSPORTS)) {
+                    return;
+                }
                 loadDevice(resp.getData());
                 createSendTransport();
             }
 
             @Override
             public void onError(Response resp) {
-
+                failSession("get router RTP capabilities", null);
             }
         });
     }
 
     private void createSendTransport() {
+        if (!isInState(RoomSessionState.CREATING_TRANSPORTS)) {
+            return;
+        }
         Log.i(TAG, "create send transport");
         try {
             JSONObject object = new JSONObject();
@@ -199,6 +317,9 @@ public class RoomClient {
             request("createWebRtcTransport", object, new ResponseHandler() {
                 @Override
                 public void onSuccess(Response resp) {
+                    if (!isInState(RoomSessionState.CREATING_TRANSPORTS)) {
+                        return;
+                    }
                     try {
                         JSONObject object = new JSONObject(resp.getData());
                         String id = object.getString("id");
@@ -221,27 +342,30 @@ public class RoomClient {
 
                             @Override
                             public void onError(Response resp) {
-
+                                failSession("connect send transport", null);
                             }
                         });
 
                     } catch (JSONException e) {
-                        e.printStackTrace();
+                        failSession("parse send transport", e);
                     }
                 }
 
                 @Override
                 public void onError(Response resp) {
-
+                    failSession("create send transport", null);
                 }
             });
         } catch (JSONException e) {
-            e.printStackTrace();
+            failSession("prepare send transport", e);
         }
     }
 
 
     private void createRecvTransport() {
+        if (!isInState(RoomSessionState.CREATING_TRANSPORTS)) {
+            return;
+        }
         Log.i(TAG, "create recv transport");
         try {
             JSONObject object = new JSONObject();
@@ -253,6 +377,9 @@ public class RoomClient {
             request("createWebRtcTransport", object, new ResponseHandler() {
                 @Override
                 public void onSuccess(Response resp) {
+                    if (!isInState(RoomSessionState.CREATING_TRANSPORTS)) {
+                        return;
+                    }
                     try {
                         JSONObject object = new JSONObject(resp.getData());
                         String id = object.getString("id");
@@ -270,21 +397,21 @@ public class RoomClient {
 
                             @Override
                             public void onError(Response resp) {
-
+                                failSession("connect receive transport", null);
                             }
                         });
                     } catch (JSONException e) {
-                        e.printStackTrace();
+                        failSession("parse receive transport", e);
                     }
                 }
 
                 @Override
                 public void onError(Response resp) {
-
+                    failSession("create receive transport", null);
                 }
             });
         } catch (JSONException e) {
-            e.printStackTrace();
+            failSession("prepare receive transport", e);
         }
     }
 
@@ -312,11 +439,14 @@ public class RoomClient {
 
             request("connectWebRtcTransport", object, handler);
         } catch (JSONException e) {
-            e.printStackTrace();
+            failSession("prepare transport connection", e);
         }
     }
 
     private void join() {
+        if (!transitionTo(RoomSessionState.JOINING, RoomSessionState.CREATING_TRANSPORTS)) {
+            return;
+        }
         try {
             JSONObject rtpCaps = new JSONObject(device.getRtpCapabilities());
 
@@ -335,9 +465,10 @@ public class RoomClient {
             request("join", object, new ResponseHandler() {
                 @Override
                 public void onSuccess(Response resp) {
+                    if (!transitionTo(RoomSessionState.JOINED, RoomSessionState.JOINING)) {
+                        return;
+                    }
                     try {
-                        initialized = true;
-
                         //Consume all producers from other peers.
                         JSONObject object = new JSONObject(resp.getData());
                         JSONArray peers = object.getJSONArray("peers");
@@ -362,21 +493,27 @@ public class RoomClient {
                             }
                         }
                     } catch (JSONException e) {
-                        e.printStackTrace();
+                        failSession("parse join response", e);
                     }
                 }
 
                 @Override
                 public void onError(Response resp) {
-
+                    failSession("join room", null);
                 }
             });
         } catch (JSONException e) {
-            e.printStackTrace();
+            failSession("prepare join", e);
         }
     }
 
     public void produceVideo(Context appContext, ProduceCallback cb) {
+        if (!isInState(RoomSessionState.JOINED) || device == null || sendTransport == null
+                || localMediaController == null) {
+            Log.w(TAG, "Cannot produce video in state " + sessionState);
+            cb.onError();
+            return;
+        }
         if (!device.canProduce("video")) {
             Log.w(TAG, "Device can't produce video");
             cb.onError();
@@ -442,6 +579,12 @@ public class RoomClient {
     }
 
     public void produceAudio(Context appContext, boolean muted, ProduceCallback cb) {
+        if (!isInState(RoomSessionState.JOINED) || device == null || sendTransport == null
+                || localMediaController == null) {
+            Log.w(TAG, "Cannot produce audio in state " + sessionState);
+            cb.onError();
+            return;
+        }
         if (!device.canProduce("audio")) {
             Log.w(TAG, "Device can't produce audio");
             cb.onError();
@@ -498,6 +641,9 @@ public class RoomClient {
     }
 
     public boolean switchCamera() {
+        if (!isInState(RoomSessionState.JOINED) || localMediaController == null) {
+            return false;
+        }
         Producer producer = findProducer("video");
         for (int i = 0; i < producers.size(); i++) {
             if (producers.get(i).kind.equals("video")) {
@@ -513,6 +659,9 @@ public class RoomClient {
     }
 
     public void applyMute(boolean muted) {
+        if (!isInState(RoomSessionState.JOINED) || localMediaController == null) {
+            return;
+        }
         Producer producer = findProducer("audio");
         if (producer != null) {
             localMediaController.setMuted(producer.getLocalMedia(), muted);
@@ -539,6 +688,9 @@ public class RoomClient {
     }
 
     public void closeAudioProducer() {
+        if (!isInState(RoomSessionState.JOINED)) {
+            return;
+        }
         Producer audioProducer = findProducer("audio");
         if (audioProducer != null) {
             audioProducer.close();
@@ -548,6 +700,9 @@ public class RoomClient {
     }
 
     public void closeVideoProducer() {
+        if (!isInState(RoomSessionState.JOINED)) {
+            return;
+        }
         Producer videoProducer = findProducer("video");
         if (videoProducer != null) {
             videoProducer.close();
@@ -569,6 +724,10 @@ public class RoomClient {
 
 
     void consumeProducer(String producerId, String peerId) {
+        if (!isInState(RoomSessionState.JOINED) || recvTransport == null) {
+            Log.w(TAG, "Ignoring producer consumption in state " + sessionState);
+            return;
+        }
         String transportId = recvTransport.getId();
         try {
             JSONObject object = new JSONObject();

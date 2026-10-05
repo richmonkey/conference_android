@@ -19,41 +19,17 @@ class RoomPeerListener implements PeerListener {
 
     @Override
     public void onClose() {
-        roomClient.handler.post(() -> roomClient.observer.onClose());
+        roomClient.handler.post(roomClient::handlePeerClosed);
     }
 
     @Override
     public void onDisconnected() {
-        roomClient.handler.post(() -> {
-            roomClient.observer.onDisconnect();
-
-            roomClient.videoRendererDelegate.removeRenderer("local");
-            for (Producer producer : roomClient.producers) {
-                producer.close();
-            }
-            roomClient.producers.clear();
-
-            roomClient.consumers.forEach((id, consumer) -> {
-                if (consumer.kind.equals("video")) {
-                    roomClient.videoRendererDelegate.removeRenderer(consumer.id);
-                }
-                consumer.close();
-            });
-            roomClient.consumers.clear();
-
-            if (roomClient.sendTransport != null) {
-                roomClient.sendTransport.close();
-                roomClient.sendTransport = null;
-            }
-            if (roomClient.recvTransport != null) {
-                roomClient.recvTransport.close();
-                roomClient.recvTransport = null;
-            }
-        });
+        roomClient.handler.post(roomClient::handlePeerDisconnected);
     }
 
     @Override
     public void onFailed() {
+        roomClient.handler.post(roomClient::handlePeerFailed);
     }
 
     @Override
@@ -115,11 +91,7 @@ class RoomPeerListener implements PeerListener {
     @Override
     public void onOpen() {
         Log.i(RoomClient.TAG, "on open");
-        roomClient.resetNextId();
-        roomClient.handler.post(() -> {
-            roomClient.observer.onConnect();
-            roomClient.auth();
-        });
+        roomClient.handler.post(roomClient::handlePeerOpened);
     }
 
     @Override
