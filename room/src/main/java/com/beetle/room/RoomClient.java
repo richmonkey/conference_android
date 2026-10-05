@@ -1,4 +1,4 @@
-package com.beetle.conference.room;
+package com.beetle.room;
 
 import android.Manifest;
 import android.content.Context;

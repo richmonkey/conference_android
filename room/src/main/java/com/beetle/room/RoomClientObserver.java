@@ -1,4 +1,4 @@
-package com.beetle.conference.room;
+package com.beetle.room;
 
 import java.util.List;
 

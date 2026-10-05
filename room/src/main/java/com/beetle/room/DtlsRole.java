@@ -1,4 +1,4 @@
-package com.beetle.conference.room;
+package com.beetle.room;
 
 /** DTLS roles expected by the room server. */
 public enum DtlsRole {

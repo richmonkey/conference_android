@@ -57,7 +57,9 @@ android {
 }
 
 dependencies {
-    implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
+    implementation project(':room')
+    // Runtime artifacts used by :room; keep their ownership in the room module.
+    implementation fileTree(dir: '../room/libs', include: ['*.jar', '*.aar'])
 
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'com.google.android.material:material:1.12.0'

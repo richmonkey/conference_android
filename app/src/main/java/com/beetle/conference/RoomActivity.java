@@ -2,11 +2,11 @@ package com.beetle.conference;
 
 import android.util.Log;
 import androidx.appcompat.app.AppCompatActivity;
-import com.beetle.conference.room.ProduceCallback;
-import com.beetle.conference.room.Producer;
-import com.beetle.conference.room.RoomClient;
-import com.beetle.conference.room.RoomClientObserver;
-import com.beetle.conference.room.VideoRendererDelegate;
+import com.beetle.room.ProduceCallback;
+import com.beetle.room.Producer;
+import com.beetle.room.RoomClient;
+import com.beetle.room.RoomClientObserver;
+import com.beetle.room.VideoRendererDelegate;
 import org.webrtc.SurfaceViewRenderer;
 import java.util.ArrayList;
 import java.util.List;

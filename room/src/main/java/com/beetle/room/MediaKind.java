@@ -1,4 +1,4 @@
-package com.beetle.conference.room;
+package com.beetle.room;
 
 /** Media kinds understood by the room protocol and mediasoup. */
 public enum MediaKind {

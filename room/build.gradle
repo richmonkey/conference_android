@@ -1,0 +1,27 @@
+apply plugin: 'com.android.library'
+
+android {
+    compileSdk rootProject.ext.compileSdk
+
+    namespace 'com.beetle.room'
+
+    defaultConfig {
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+
+        ndk {
+            abiFilters 'armeabi-v7a', 'x86', 'arm64-v8a'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // Android Gradle Plugin cannot package direct local AARs into a library AAR.
+    // The app supplies these runtime dependencies from this module's libs directory.
+    compileOnly fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
+}

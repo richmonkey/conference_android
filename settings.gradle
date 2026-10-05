@@ -1,4 +1,4 @@
 rootProject.name = 'conference'
 include ':app'
-
+include ':room'
 

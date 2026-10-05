@@ -2,7 +2,7 @@ package com.beetle.conference;
 
 import android.app.Application;
 
-import com.beetle.conference.room.RoomSdk;
+import com.beetle.room.RoomSdk;
 
 /** Application entry point for process-wide conferencing SDK setup. */
 public final class ConferenceApplication extends Application {
