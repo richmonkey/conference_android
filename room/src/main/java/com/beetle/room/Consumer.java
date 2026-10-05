@@ -21,6 +21,10 @@ public class Consumer {
         return track;
     }
 
+    RtpReceiver getRtpReceiver() {
+        return rtpReceiver;
+    }
+
     Consumer(String id, String localId, String producerId, RtpReceiver rtpReceiver,
              MediaStreamTrack track, JSONObject rtpParameters, String kind, String peerId,
              RecvTransport transport) {

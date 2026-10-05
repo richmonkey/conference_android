@@ -16,13 +16,18 @@ import org.mediasoup.SendTransport;
 import org.mediasoup.Transport;
 import org.webrtc.EglBase;
 import org.webrtc.RtpParameters;
+import org.webrtc.RtpReceiver;
 import org.webrtc.SurfaceViewRenderer;
 import org.webrtc.VideoSink;
 import org.webrtc.VideoTrack;
+import org.webrtc.RtpSource;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.BiConsumer;
 
 import protooclient.Peer;
@@ -34,6 +39,7 @@ public class RoomClient {
     static final String TAG = "RoomActivity";
     public static final String VIDEO_TRACK_ID = "ARDAMSv0";
     public static final String AUDIO_TRACK_ID = "ARDAMSa0";
+    public static final double DEFAULT_ACTIVE_SPEAKER_AUDIO_LEVEL_THRESHOLD = 0.1d;
 
     final String token;
     final String displayName;
@@ -106,6 +112,56 @@ public class RoomClient {
 
     public RoomClientConfig getConfig() {
         return config;
+    }
+
+    /**
+     * Returns the IDs of remote peers whose audio level is at or above the
+     * default active-speaker threshold. Call periodically to refresh UI state.
+     */
+    public List<String> detectActiveSpeakerPeerIds() {
+        return detectActiveSpeakerPeerIds(DEFAULT_ACTIVE_SPEAKER_AUDIO_LEVEL_THRESHOLD);
+    }
+
+    /**
+     * Returns the IDs of remote peers whose audio level is at or above
+     * {@code audioLevelThreshold}. WebRTC audio levels range from 0 to 1.
+     */
+    public List<String> detectActiveSpeakerPeerIds(double audioLevelThreshold) {
+        if (audioLevelThreshold < 0d || audioLevelThreshold > 1d) {
+            throw new IllegalArgumentException("audioLevelThreshold must be between 0 and 1");
+        }
+
+        Set<String> activePeerIds = new LinkedHashSet<>();
+        for (Consumer consumer : consumers.values()) {
+            if (!MediaKind.AUDIO.wireValue().equals(consumer.kind)
+                    || consumer.peerId == null || consumer.peerId.isEmpty()) {
+                continue;
+            }
+
+            RtpReceiver receiver = consumer.getRtpReceiver();
+            if (receiver == null) {
+                continue;
+            }
+
+            for (RtpSource source : receiver.getSources()) {
+                if (source.getSourceType() != RtpSource.Type.SSRC) {
+                    continue;
+                }
+
+                Double audioLevel = source.getAudioLevel();
+                if (audioLevel == null || audioLevel < audioLevelThreshold) {
+                    continue;
+                }
+
+                if (activePeerIds.add(consumer.peerId)) {
+                    Log.i(TAG, "Peer " + consumer.peerId + " is speaking");
+                }
+                break;
+            }
+        }
+        return activePeerIds.isEmpty()
+                ? Collections.emptyList()
+                : new ArrayList<>(activePeerIds);
     }
 
     public void start(String protooUrl) {
