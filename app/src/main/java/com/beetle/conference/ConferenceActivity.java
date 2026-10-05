@@ -6,7 +6,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.media.AudioManager;
 import android.os.Build;
@@ -19,13 +18,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.ImageButton;
 import android.widget.RelativeLayout;
-
-import androidx.appcompat.app.AppCompatActivity;
-
-import org.webrtc.CameraVideoCapturer;
 import org.webrtc.SurfaceViewRenderer;
-import org.webrtc.VideoCapturer;
-
 import java.util.ArrayList;
 
 public class ConferenceActivity extends RoomActivity {

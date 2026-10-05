@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.PixelFormat;
 import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -20,6 +21,7 @@ import org.webrtc.AudioTrack;
 import org.webrtc.Camera1Enumerator;
 import org.webrtc.Camera2Enumerator;
 import org.webrtc.CameraEnumerator;
+import org.webrtc.CameraVideoCapturer;
 import org.webrtc.DefaultVideoDecoderFactory;
 import org.webrtc.DefaultVideoEncoderFactory;
 import org.webrtc.EglBase;
@@ -79,10 +81,18 @@ public class RoomClient {
 
     Handler handler;
 
+    protected boolean cameraOn = true;
+    protected boolean microphoneOn = true;
+
+    boolean muted = false;
+
     HashMap<Long, PendingRequest> pendingRequests = new HashMap<>();
 
     HashMap<String, Consumer> consumers = new HashMap<>();
 
+    ArrayList<RoomClient.Producer> producers = new ArrayList<>();
+
+    VideoRendererDelegate videoRendererDelegate;
     //final Context appContext;
 
     final RoomClientObserver observer;
@@ -93,14 +103,18 @@ public class RoomClient {
         void onError();
     }
 
+    public interface VideoRendererDelegate {
+        SurfaceViewRenderer createRenderer(String id, boolean isLocal);
+        void removeRenderer(String id);
+    }
+
     public interface RoomClientObserver {
         void onConnect();
         void onDisconnect();
         void onClose();
+        void onJoined(List<String> peers);
         void onPeer(String peerId);
         void onPeerClosed(String peerId);
-        void onConsumer(Consumer consumer);
-        void onConsumerClosed(Consumer consumer);
     }
 
     interface ResponseHandler {
@@ -250,13 +264,25 @@ public class RoomClient {
                 @Override
                 public void run() {
                     observer.onDisconnect();
+
+                    videoRendererDelegate.removeRenderer("local");
+                    for (int i = 0; i < producers.size(); i++) {
+                        RoomClient.Producer producer = producers.get(i);
+                        producer.close();
+                    }
+                    producers.clear();
+
                     consumers.forEach(new BiConsumer<String, Consumer>() {
                         @Override
                         public void accept(String s, Consumer consumer) {
+                            if (consumer.kind.equals("video")) {
+                                videoRendererDelegate.removeRenderer(consumer.id);
+                            }
                             consumer.close();
                         }
                     });
                     consumers.clear();
+
                     if (sendTransport != null) {
                         sendTransport.close();
                         sendTransport = null;
@@ -325,8 +351,12 @@ public class RoomClient {
                                 return;
                             }
                             consumer.close();
+
+                            if (consumer.kind.equals("video")) {
+                                videoRendererDelegate.removeRenderer(consumer.id);
+                            }
+
                             consumers.remove(consumerId);
-                            observer.onConsumerClosed(consumer);
                         }
                     });
                 } else if (method.equals("consumerPaused")) {
@@ -355,6 +385,8 @@ public class RoomClient {
             handler.post(new Runnable() {
                 @Override
                 public void run() {
+
+                    observer.onConnect();
                     auth();
                 }
             });
@@ -424,7 +456,7 @@ public class RoomClient {
         rtcConfig.keyType = PeerConnection.KeyType.ECDSA;
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
 
-        handler = new Handler();
+        handler = new Handler(Looper.myLooper());
     }
 
     public EglBase getRootEglBase() {
@@ -672,11 +704,19 @@ public class RoomClient {
                     try {
                         initialized = true;
 
-                        observer.onConnect();
-
                         //Consume all producers from other peers.
                         JSONObject object = new JSONObject(resp.getData());
                         JSONArray peers = object.getJSONArray("peers");
+
+                        ArrayList<String> peerIds = new ArrayList<>();
+                        for (int i = 0; i < peers.length();i ++) {
+                            JSONObject peer = peers.getJSONObject(i);
+                            String peerId = peer.getString("id");
+                            peerIds.add(peerId);
+                        }
+
+                        observer.onJoined(peerIds);
+
                         for (int i = 0; i < peers.length();i ++) {
                             JSONObject peer = peers.getJSONObject(i);
                             String peerId = peer.getString("id");
@@ -702,7 +742,7 @@ public class RoomClient {
         }
     }
 
-    public void produceVideo(Context appContext, SurfaceViewRenderer renderer, ProduceCallback cb) {
+    public void produceVideo(Context appContext, ProduceCallback cb) {
         if (!device.canProduce("video")) {
             Log.w(TAG, "Device can't produce video");
             cb.onError();
@@ -716,6 +756,7 @@ public class RoomClient {
             return;
         }
 
+        SurfaceViewRenderer renderer = videoRendererDelegate.createRenderer("local", true);
         VideoSource videoSource = pcFactory.createVideoSource(false);
         VideoTrack videoTrack = createVideoTrack(videoSource, renderer);
         VideoCapturer videoCapturer = createVideoCapturer(videoSource, appContext);
@@ -758,6 +799,7 @@ public class RoomClient {
                                 sendResult.rtpSender.track(), rtpParameters, "video",
                                 videoSource, videoCapturer, sendTransport);
                         cb.onSuccess(producer);
+                        producers.add(producer);
                     } catch(JSONException e) {
                         e.printStackTrace();
                         cb.onError();
@@ -816,6 +858,7 @@ public class RoomClient {
                                 sendResult.rtpSender, sendResult.rtpSender.track(), rtpParameters,
                                 "audio", audioSource, sendTransport);
                         cb.onSuccess(producer);
+                        producers.add(producer);
                     } catch(JSONException e) {
                         e.printStackTrace();
                         cb.onError();
@@ -833,7 +876,31 @@ public class RoomClient {
         }
     }
 
-    public void closeProducer(Producer producer) {
+    public boolean switchCamera() {
+        RoomClient.Producer producer = findProducer("video");
+        for (int i = 0; i < producers.size(); i++) {
+            if (producers.get(i).kind.equals("video")) {
+                producer = producers.get(i);
+                break;
+            }
+        }
+        if (producer == null) {
+            return false;
+        }
+
+        VideoCapturer videoCapturer = producer.getVideoCapturer();
+        if (videoCapturer instanceof CameraVideoCapturer) {
+            Log.d(TAG, "Switch camera");
+            CameraVideoCapturer cameraVideoCapturer = (CameraVideoCapturer) videoCapturer;
+            cameraVideoCapturer.switchCamera(null);
+            return true;
+        } else {
+            Log.d(TAG, "Will not switch camera, video caputurer is not a camera");
+            return false;
+        }
+    }
+
+    private void closeProducer(Producer producer) {
         try {
             JSONObject object = new JSONObject();
             object.put("producerId", producer.id);
@@ -850,6 +917,35 @@ public class RoomClient {
         } catch (JSONException e) {
             e.printStackTrace();
         }
+    }
+
+    public void closeAudioProducer() {
+        Producer audioProducer = findProducer("audio");
+        if (audioProducer != null) {
+            audioProducer.close();
+            closeProducer(audioProducer);
+            producers.remove(audioProducer);
+        }
+    }
+
+    public void closeVideoProducer() {
+        Producer videoProducer = findProducer("video");
+        if (videoProducer != null) {
+            videoProducer.close();
+            closeProducer(videoProducer);
+            producers.remove(videoProducer);
+            videoRendererDelegate.removeRenderer("local");
+        }
+    }
+
+    private Producer findProducer(String kind) {
+        for (int i = 0; i < producers.size(); i++) {
+            Producer p = producers.get(i);
+            if (p.kind.equals(kind)) {
+                return p;
+            }
+        }
+        return null;
     }
 
 
@@ -881,7 +977,7 @@ public class RoomClient {
                                 kind, peerId, recvTransport);
                         consumers.put(id, consumer);
                         resumeConsumer(consumer);
-                        observer.onConsumer(consumer);
+
                     } catch (JSONException e) {
                         e.printStackTrace();
                     }
