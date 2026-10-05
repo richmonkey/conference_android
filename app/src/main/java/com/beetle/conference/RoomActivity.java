@@ -2,12 +2,17 @@ package com.beetle.conference;
 
 import android.util.Log;
 import androidx.appcompat.app.AppCompatActivity;
+import com.beetle.conference.room.ProduceCallback;
+import com.beetle.conference.room.Producer;
+import com.beetle.conference.room.RoomClient;
+import com.beetle.conference.room.RoomClientObserver;
+import com.beetle.conference.room.VideoRendererDelegate;
 import org.webrtc.SurfaceViewRenderer;
 import java.util.ArrayList;
 import java.util.List;
 
 
-abstract public class RoomActivity extends AppCompatActivity implements RoomClient.RoomClientObserver, RoomClient.VideoRendererDelegate {
+abstract public class RoomActivity extends AppCompatActivity implements RoomClientObserver, VideoRendererDelegate {
     private static final String TAG = "RoomActivity";
 
     ArrayList<String> peers = new ArrayList<>();
@@ -97,9 +102,9 @@ abstract public class RoomActivity extends AppCompatActivity implements RoomClie
 
 
     void produceVideo() {
-        roomClient.produceVideo(this.getApplicationContext(), new RoomClient.ProduceCallback() {
+        roomClient.produceVideo(this.getApplicationContext(), new ProduceCallback() {
             @Override
-            public void onSuccess(RoomClient.Producer producer) {
+            public void onSuccess(Producer producer) {
 
             }
 
@@ -112,9 +117,9 @@ abstract public class RoomActivity extends AppCompatActivity implements RoomClie
     }
 
     void produceAudio() {
-        roomClient.produceAudio(this.getApplicationContext(), muted, new RoomClient.ProduceCallback() {
+        roomClient.produceAudio(this.getApplicationContext(), muted, new ProduceCallback() {
             @Override
-            public void onSuccess(RoomClient.Producer producer) {
+            public void onSuccess(Producer producer) {
 
             }
 
@@ -125,4 +130,3 @@ abstract public class RoomActivity extends AppCompatActivity implements RoomClie
         });
     }
 }
-

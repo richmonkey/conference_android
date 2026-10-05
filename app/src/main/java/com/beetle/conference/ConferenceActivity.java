@@ -18,6 +18,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.ImageButton;
 import android.widget.RelativeLayout;
+import com.beetle.conference.room.RoomClient;
 import org.webrtc.SurfaceViewRenderer;
 import java.util.ArrayList;
 

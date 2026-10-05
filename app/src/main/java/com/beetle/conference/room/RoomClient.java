@@ -1,4 +1,4 @@
-package com.beetle.conference;
+package com.beetle.conference.room;
 
 import android.Manifest;
 import android.content.Context;
@@ -26,12 +26,9 @@ import org.webrtc.DefaultVideoDecoderFactory;
 import org.webrtc.DefaultVideoEncoderFactory;
 import org.webrtc.EglBase;
 import org.webrtc.MediaConstraints;
-import org.webrtc.MediaStreamTrack;
 import org.webrtc.PeerConnection;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.RtpParameters;
-import org.webrtc.RtpReceiver;
-import org.webrtc.RtpSender;
 import org.webrtc.SurfaceTextureHelper;
 import org.webrtc.SurfaceViewRenderer;
 import org.webrtc.VideoCapturer;
@@ -49,14 +46,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 
 import protooclient.Peer;
-import protooclient.PeerListener;
-import protooclient.Notification;
 import protooclient.Request;
 import protooclient.Response;
 
 
 public class RoomClient {
-    private static final String TAG = "RoomActivity";
+    static final String TAG = "RoomActivity";
     public static final String VIDEO_TRACK_ID = "ARDAMSv0";
     public static final String AUDIO_TRACK_ID = "ARDAMSa0";
 
@@ -85,7 +80,7 @@ public class RoomClient {
 
     HashMap<String, Consumer> consumers = new HashMap<>();
 
-    ArrayList<RoomClient.Producer> producers = new ArrayList<>();
+    ArrayList<Producer> producers = new ArrayList<>();
 
     final VideoRendererDelegate videoRendererDelegate;
     //final Context appContext;
@@ -93,326 +88,10 @@ public class RoomClient {
     final RoomClientObserver observer;
 
 
-    public interface ProduceCallback {
-        void onSuccess(Producer producer);
-        void onError();
-    }
-
-    public interface VideoRendererDelegate {
-        SurfaceViewRenderer createRenderer(String id, boolean isLocal);
-        void removeRenderer(String id);
-    }
-
-    public interface RoomClientObserver {
-        void onConnect();
-        void onDisconnect();
-        void onClose();
-        void onJoined(List<String> peers);
-        void onPeer(String peerId);
-        void onPeerClosed(String peerId);
-    }
-
-    interface ResponseHandler {
-        void onSuccess(Response resp);
-        void onError(Response resp);
-    }
-
-    static class PendingRequest {
-        public Request request;
-        public ResponseHandler handler;
-        public PendingRequest(Request req, ResponseHandler handler) {
-            this.request = req;
-            this.handler = handler;
-        }
-    }
-
-
-    public static class Producer {
-        public String id;
-        public String localId;
-        private RtpSender rtpSender;
-        private MediaStreamTrack track;
-        public JSONObject rtpParameters;
-        public String kind;
-        private AudioSource audioSource;
-        private VideoSource videoSource;
-        private VideoCapturer videoCapturer;
-
-        private SendTransport sendTransport;
-
-        private boolean closed = false;
-
-        Producer(String id, String localId, RtpSender rtpSender, MediaStreamTrack track,
-                 JSONObject rtpParameters, String kind, VideoSource videoSource,
-                 VideoCapturer videoCapturer, SendTransport transport) {
-            this.id = id;
-            this.localId = localId;
-            this.rtpSender = rtpSender;
-            this.track = track;
-            this.rtpParameters = rtpParameters;
-            this.kind = kind;
-            this.videoSource = videoSource;
-            this.videoCapturer = videoCapturer;
-            this.sendTransport = transport;
-        }
-
-        Producer(String id, String localId, RtpSender rtpSender, MediaStreamTrack track,
-                 JSONObject rtpParameters, String kind, AudioSource audioSource, SendTransport transport) {
-            this.id = id;
-            this.localId = localId;
-            this.rtpSender = rtpSender;
-            this.track = track;
-            this.rtpParameters = rtpParameters;
-            this.kind = kind;
-            this.audioSource = audioSource;
-            this.sendTransport = transport;
-        }
-
-        public VideoCapturer getVideoCapturer() {
-            return videoCapturer;
-        }
-        public void close() {
-            if (closed) {
-                return;
-            }
-            closed = true;
-            sendTransport.closeProducer(localId);
-
-            if (videoCapturer != null) {
-                try {
-                    videoCapturer.stopCapture();
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-                videoCapturer.dispose();
-                videoCapturer = null;
-            }
-
-            if (track != null) {
-                track.dispose();
-                track = null;
-            }
-
-            if (videoSource != null) {
-                videoSource.dispose();
-                videoSource = null;
-            }
-            if (audioSource != null) {
-                audioSource.dispose();
-                audioSource = null;
-            }
-        }
-    }
-
-    public static class Consumer {
-        public String id;
-        public String localId;
-        public String producerId;
-        private RtpReceiver rtpReceiver;
-        private MediaStreamTrack track;
-        public JSONObject rtpParameters;
-        public String peerId;
-        public String kind;
-        private RecvTransport recvTransport;
-
-        private boolean closed = false;
-
-        public MediaStreamTrack getTrack() {
-            return track;
-        }
-
-        Consumer(String id, String localId, String producerId, RtpReceiver rtpReceiver,
-                 MediaStreamTrack track, JSONObject rtpParameters, String kind, String peerId,
-                 RecvTransport transport) {
-            this.id = id;
-            this.localId = localId;
-            this.producerId = producerId;
-            this.rtpReceiver = rtpReceiver;
-            this.track = track;
-            this.rtpParameters = rtpParameters;
-            this.kind = kind;
-            this.peerId = peerId;
-            this.recvTransport = transport;
-        }
-
-        public void close() {
-            if (closed) {
-                return;
-            }
-            closed = true;
-            recvTransport.closeConsumer(localId);
-        }
-    }
-
-    class PeerListenerImpl implements PeerListener {
-        public void onClose() {
-            handler.post(new Runnable() {
-                @Override
-                public void run() {
-                    observer.onClose();
-                }
-            });
-        }
-
-        public void onDisconnected() {
-            handler.post(new Runnable() {
-                @Override
-                public void run() {
-                    observer.onDisconnect();
-
-                    videoRendererDelegate.removeRenderer("local");
-                    for (int i = 0; i < producers.size(); i++) {
-                        RoomClient.Producer producer = producers.get(i);
-                        producer.close();
-                    }
-                    producers.clear();
-
-                    consumers.forEach(new BiConsumer<String, Consumer>() {
-                        @Override
-                        public void accept(String s, Consumer consumer) {
-                            if (consumer.kind.equals("video")) {
-                                videoRendererDelegate.removeRenderer(consumer.id);
-                            }
-                            consumer.close();
-                        }
-                    });
-                    consumers.clear();
-
-                    if (sendTransport != null) {
-                        sendTransport.close();
-                        sendTransport = null;
-                    }
-                    if (recvTransport != null) {
-                        recvTransport.close();
-                        recvTransport = null;
-                    }
-                }
-            });
-        }
-
-        public void onFailed() {
-
-        }
-
-        public void onNotification(Notification p0) {
-            String method = p0.getMethod();
-            try {
-                Log.i(TAG, "handle notification:" + method + " data:" + p0.getData());
-
-                if (method.equals("newPeer")) {
-                    JSONObject object = new JSONObject(p0.getData());
-                    String peerId = object.getString("peerId");
-                    String displayName = object.getString("displayName");
-                    Log.i(TAG, "new peer id:" + peerId + " name:" + displayName);
-                    handler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            observer.onPeer(peerId);
-                        }
-                    });
-                } else if (method.equals("peerClosed")) {
-                    JSONObject object = new JSONObject(p0.getData());
-                    String peerId = object.getString("peerId");
-
-                    handler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            observer.onPeerClosed(peerId);
-                        }
-                    });
-
-                } else if (method.equals("newProducer")) {
-                    JSONObject object = new JSONObject(p0.getData());
-                    String id = object.getString("id");
-                    String kind = object.getString("kind");
-                    String peerId = object.getString("peerId");
-
-                    Log.i(TAG, "new producer id:" + id + " kind:" + kind + " peer id:" + peerId);
-                    handler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            consumeProducer(id, peerId);
-                        }
-                    });
-                } else if (method.equals("consumerClosed")) {
-                    JSONObject object = new JSONObject(p0.getData());
-                    String consumerId = object.getString("consumerId");
-
-                    handler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            Consumer consumer = consumers.get(consumerId);
-                            if (consumer == null) {
-                                return;
-                            }
-                            consumer.close();
-
-                            if (consumer.kind.equals("video")) {
-                                videoRendererDelegate.removeRenderer(consumer.id);
-                            }
-
-                            consumers.remove(consumerId);
-                        }
-                    });
-                } else if (method.equals("consumerPaused")) {
-                    JSONObject object = new JSONObject(p0.getData());
-                    String consumerId = object.getString("consumerId");
-                    handler.post(new Runnable() {
-                        @Override
-                        public void run() {
-                            Log.i(TAG, "consumer:" + consumerId + " paused");
-                        }
-                    });
-                } else if (method.equals("consumerResumed")) {
-                    JSONObject object = new JSONObject(p0.getData());
-                    String consumerId = object.getString("consumerId");
-                    Log.i(TAG, "consumer:" + consumerId + " resumed");
-                } else {
-                    Log.i(TAG, "unhandled notification:" + method + " data:" + p0.getData());
-                }
-            } catch (JSONException e) {
-                e.printStackTrace();
-            }
-        }
-        public void onOpen() {
-            Log.i(TAG, "on open");
-            resetNextId();
-            handler.post(new Runnable() {
-                @Override
-                public void run() {
-
-                    observer.onConnect();
-                    auth();
-                }
-            });
-        }
-
-        public void onRequest(Request p0) {
-            Log.i(TAG, "on request");
-        }
-
-        public void onResponse(Response resp) {
-            Log.i(TAG, "on response:" + resp.getId() + " " + resp.getData() + " " + resp.getOk());
-            if (!resp.getOk()) {
-                Log.w(TAG, "on response err:" + " " + resp.getErrorCode() + " " + resp.getErrorReason());
-            }
-
-            handler.post(() -> {
-               PendingRequest pendingRequest = pendingRequests.get(resp.getId());
-               if (pendingRequest == null) {
-                   Log.w(TAG, "Can't find request with response id:" + resp.getId());
-                   return;
-               }
-               pendingRequests.remove(resp.getId());
-               if (resp.getOk()) {
-                   pendingRequest.handler.onSuccess(resp);
-               } else {
-                   pendingRequest.handler.onError(resp);
-               }
-            });
-        }
-    }
-
+    /*
+     * Peer callbacks live in RoomPeerListener so the signaling adapter remains
+     * separate from room session orchestration.
+     */
     public RoomClient(Context appContext,
                       RoomClientObserver observer,
                       VideoRendererDelegate videoRendererDelegate,
@@ -463,7 +142,7 @@ public class RoomClient {
 
     public void start(String protooUrl) {
         Log.i(TAG, "open peer");
-        peer = new Peer(protooUrl, new PeerListenerImpl());
+        peer = new Peer(protooUrl, new RoomPeerListener(this));
         peer.open();
     }
 
@@ -503,7 +182,7 @@ public class RoomClient {
         }
     }
 
-    private void auth() {
+    void auth() {
         try {
             JSONObject j = new JSONObject();
             j.put("token", token);
@@ -871,7 +550,7 @@ public class RoomClient {
     }
 
     public boolean switchCamera() {
-        RoomClient.Producer producer = findProducer("video");
+        Producer producer = findProducer("video");
         for (int i = 0; i < producers.size(); i++) {
             if (producers.get(i).kind.equals("video")) {
                 producer = producers.get(i);
@@ -897,7 +576,7 @@ public class RoomClient {
     public void applyMute(boolean muted) {
         Producer producer = findProducer("audio");
         if (producer != null) {
-            AudioTrack track = (AudioTrack) producer.track;
+            AudioTrack track = (AudioTrack) producer.getTrack();
             track.setEnabled(!muted);
         }
     }
@@ -951,7 +630,7 @@ public class RoomClient {
     }
 
 
-    private void consumeProducer(String producerId, String peerId) {
+    void consumeProducer(String producerId, String peerId) {
         String transportId = recvTransport.getId();
         try {
             JSONObject object = new JSONObject();
@@ -1070,7 +749,7 @@ public class RoomClient {
         }
     }
 
-    private void resetNextId() {
+    void resetNextId() {
         nextId = 0;
     }
 
