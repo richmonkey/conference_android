@@ -67,7 +67,7 @@ class RoomPeerListener implements PeerListener {
                     }
                     consumer.close();
 
-                    if (consumer.kind.equals("video")) {
+                    if (consumer.kind.equals(MediaKind.VIDEO.wireValue())) {
                         roomClient.videoRendererDelegate.removeRenderer(consumer.id);
                     }
                     roomClient.consumers.remove(consumerId);

@@ -42,6 +42,7 @@ public class RoomClient {
 
     final String token;
     final String displayName;
+    final RoomClientConfig config;
 
     WebRtcRuntime webRtcRuntime;
     LocalMediaController localMediaController;
@@ -75,8 +76,19 @@ public class RoomClient {
                       VideoRendererDelegate videoRendererDelegate,
                       String token,
                       String displayName) {
+        this(appContext, observer, videoRendererDelegate, token, displayName,
+                RoomClientConfig.defaultConfig());
+    }
+
+    public RoomClient(Context appContext,
+                      RoomClientObserver observer,
+                      VideoRendererDelegate videoRendererDelegate,
+                      String token,
+                      String displayName,
+                      RoomClientConfig config) {
         this.token = token;
         this.displayName = displayName;
+        this.config = java.util.Objects.requireNonNull(config, "config");
 
         this.observer = observer;
         this.videoRendererDelegate = videoRendererDelegate;
@@ -93,7 +105,7 @@ public class RoomClient {
         Log.i(TAG, "mediasoup version:" + MediaSoupClient.version());
 
         webRtcRuntime = new WebRtcRuntime(appContext);
-        localMediaController = new LocalMediaController(webRtcRuntime);
+        localMediaController = new LocalMediaController(webRtcRuntime, config.getVideoCapture());
 
         handler = new Handler(Looper.myLooper());
     }
@@ -104,6 +116,10 @@ public class RoomClient {
 
     public RoomSessionState getSessionState() {
         return sessionState;
+    }
+
+    public RoomClientConfig getConfig() {
+        return config;
     }
 
     public void start(String protooUrl) {
@@ -147,7 +163,7 @@ public class RoomClient {
     /** Releases resources owned by the current Peer connection but keeps automatic reconnection possible. */
     private void releaseRoomResources() {
         for (Producer producer : producers) {
-            if (producer.kind.equals("video")) {
+            if (producer.kind.equals(MediaKind.VIDEO.wireValue())) {
                 videoRendererDelegate.removeRenderer("local");
             }
             producer.close();
@@ -157,7 +173,7 @@ public class RoomClient {
         consumers.forEach(new BiConsumer<String, Consumer>() {
             @Override
             public void accept(String s, Consumer consumer) {
-                if (consumer.kind.equals("video")) {
+                if (consumer.kind.equals(MediaKind.VIDEO.wireValue())) {
                     videoRendererDelegate.removeRenderer(consumer.id);
                 }
                 consumer.close();
@@ -310,32 +326,22 @@ public class RoomClient {
         }
         Log.i(TAG, "create send transport");
         try {
-            JSONObject object = new JSONObject();
-            // Todo put sctpCapabilities
-            object.put("forceTcp", false);
-            object.put("producing", true);
-            object.put("consuming", false);
-
-            request("createWebRtcTransport", object, new ResponseHandler() {
+            request("createWebRtcTransport", new RoomProtocol.CreateTransportRequest(true, false), new ResponseHandler() {
                 @Override
                 public void onSuccess(Response resp) {
                     if (!isInState(RoomSessionState.CREATING_TRANSPORTS)) {
                         return;
                     }
                     try {
-                        JSONObject object = new JSONObject(resp.getData());
-                        String id = object.getString("id");
-                        Object iceParameters = object.get("iceParameters");
-                        Object iceCandidates = object.get("iceCandidates");
-                        Object dtlsParameters = object.get("dtlsParameters");
-                        Log.i(TAG, "iceParameters:" + iceParameters);
-                        Log.i(TAG, "iceCandidates:" + iceCandidates);
-                        Log.i(TAG, "dtlsParameters:" + dtlsParameters);
+                        RoomProtocol.TransportResponse transport = RoomProtocol.TransportResponse.fromJson(resp.getData());
+                        Log.i(TAG, "iceParameters:" + transport.iceParameters);
+                        Log.i(TAG, "iceCandidates:" + transport.iceCandidates);
+                        Log.i(TAG, "dtlsParameters:" + transport.dtlsParameters);
 
-                        sendTransport = device.createSendTransport(id, iceParameters.toString(), iceCandidates.toString(), dtlsParameters.toString(),
+                        sendTransport = device.createSendTransport(transport.id, transport.iceParameters, transport.iceCandidates, transport.dtlsParameters,
                                 webRtcRuntime.getRtcConfiguration(), webRtcRuntime.getPeerConnectionFactory());
 
-                        connectTransport(sendTransport, "server", new ResponseHandler() {
+                        connectTransport(sendTransport, DtlsRole.SERVER, new ResponseHandler() {
                             @Override
                             public void onSuccess(Response resp) {
                                 Log.i(TAG, "send transport connect success");
@@ -370,27 +376,17 @@ public class RoomClient {
         }
         Log.i(TAG, "create recv transport");
         try {
-            JSONObject object = new JSONObject();
-            // Todo put sctpCapabilities
-            object.put("forceTcp", false);
-            object.put("producing", false);
-            object.put("consuming", true);
-
-            request("createWebRtcTransport", object, new ResponseHandler() {
+            request("createWebRtcTransport", new RoomProtocol.CreateTransportRequest(false, true), new ResponseHandler() {
                 @Override
                 public void onSuccess(Response resp) {
                     if (!isInState(RoomSessionState.CREATING_TRANSPORTS)) {
                         return;
                     }
                     try {
-                        JSONObject object = new JSONObject(resp.getData());
-                        String id = object.getString("id");
-                        Object iceParameters = object.get("iceParameters");
-                        Object iceCandidates = object.get("iceCandidates");
-                        Object dtlsParameters = object.get("dtlsParameters");
-                        recvTransport = device.createRecvTransport(id, iceParameters.toString(), iceCandidates.toString(), dtlsParameters.toString(),
+                        RoomProtocol.TransportResponse transport = RoomProtocol.TransportResponse.fromJson(resp.getData());
+                        recvTransport = device.createRecvTransport(transport.id, transport.iceParameters, transport.iceCandidates, transport.dtlsParameters,
                                 webRtcRuntime.getRtcConfiguration(), webRtcRuntime.getPeerConnectionFactory());
-                        connectTransport(recvTransport, "client", new ResponseHandler() {
+                        connectTransport(recvTransport, DtlsRole.CLIENT, new ResponseHandler() {
                             @Override
                             public void onSuccess(Response resp) {
                                 Log.i(TAG, "recv transport connect success");
@@ -421,25 +417,11 @@ public class RoomClient {
     **    Params:
     **         localDtlsRole: sendTransport with "server" or recvTransport with "client"
     */
-    private void connectTransport(Transport transport, String localDtlsRole, ResponseHandler handler) {
+    private void connectTransport(Transport transport, DtlsRole localDtlsRole, ResponseHandler handler) {
         try {
-            JSONObject fingerprint = new JSONObject();
             Fingerprint fp = transport.getFingerprint();
-            fingerprint.put("algorithm", fp.algorithm);
-            fingerprint.put("value", fp.fingerprint);
-
-            JSONArray fingerprints = new JSONArray();
-            fingerprints.put(fingerprint);
-
-            JSONObject dtlsParameters = new JSONObject();
-            dtlsParameters.put("role", localDtlsRole);
-            dtlsParameters.put("fingerprints", fingerprints);
-
-            JSONObject object = new JSONObject();
-            object.put("transportId", transport.getId());
-            object.put("dtlsParameters", dtlsParameters);
-
-            request("connectWebRtcTransport", object, handler);
+            request("connectWebRtcTransport", new RoomProtocol.ConnectTransportRequest(
+                    transport.getId(), localDtlsRole, fp.algorithm, fp.fingerprint), handler);
         } catch (JSONException e) {
             failSession("prepare transport connection", e);
         }
@@ -452,19 +434,7 @@ public class RoomClient {
         try {
             JSONObject rtpCaps = new JSONObject(device.getRtpCapabilities());
 
-            JSONObject device = new JSONObject();
-            device.put("flag", "android-native");
-            device.put("name", "android");
-            device.put("version", "113");
-
-            JSONObject object = new JSONObject();
-            object.put("displayName", displayName);
-            object.put("device", device);
-            object.put("produceVideo", true);
-            object.put("produceAudio", true);
-            object.put("rtpCapabilities", rtpCaps);
-
-            request("join", object, new ResponseHandler() {
+            request("join", new RoomProtocol.JoinRequest(displayName, config.getDeviceInfo(), rtpCaps), new ResponseHandler() {
                 @Override
                 public void onSuccess(Response resp) {
                     if (!transitionTo(RoomSessionState.JOINED, RoomSessionState.JOINING)) {
@@ -472,27 +442,15 @@ public class RoomClient {
                     }
                     try {
                         //Consume all producers from other peers.
-                        JSONObject object = new JSONObject(resp.getData());
-                        JSONArray peers = object.getJSONArray("peers");
+                        RoomProtocol.JoinResponse joinResponse = RoomProtocol.JoinResponse.fromJson(resp.getData());
 
                         ArrayList<String> peerIds = new ArrayList<>();
-                        for (int i = 0; i < peers.length();i ++) {
-                            JSONObject peer = peers.getJSONObject(i);
-                            String peerId = peer.getString("id");
-                            peerIds.add(peerId);
-                        }
+                        for (RoomProtocol.Peer peer : joinResponse.peers) peerIds.add(peer.id);
 
                         observer.onJoined(peerIds);
 
-                        for (int i = 0; i < peers.length();i ++) {
-                            JSONObject peer = peers.getJSONObject(i);
-                            String peerId = peer.getString("id");
-                            JSONArray producers = peer.getJSONArray("producers");
-                            for (int j = 0; j < producers.length(); j++) {
-                                JSONObject producer = producers.getJSONObject(j);
-                                String producerId = producer.getString("id");
-                                consumeProducer(producerId, peerId);
-                            }
+                        for (RoomProtocol.Peer peer : joinResponse.peers) {
+                            for (String producerId : peer.producerIds) consumeProducer(producerId, peer.id);
                         }
                     } catch (JSONException e) {
                         failSession("parse join response", e);
@@ -516,7 +474,7 @@ public class RoomClient {
             cb.onError();
             return;
         }
-        if (!device.canProduce("video")) {
+        if (!device.canProduce(MediaKind.VIDEO.wireValue())) {
             Log.w(TAG, "Device can't produce video");
             cb.onError();
             return;
@@ -538,28 +496,21 @@ public class RoomClient {
         }
 
         try {
-            JSONObject codecOptions = new JSONObject();
-            codecOptions.put("videoGoogleStartBitrate", 1000);
+            JSONObject codecOptions = RoomProtocol.videoCodecOptions(config.getVideoCodec());
 
             List<RtpParameters.Encoding> encodings = new ArrayList<>();
             SendTransport.SendResult sendResult = sendTransport.produce(videoMedia.getTrack(), encodings, codecOptions.toString(), null);
             JSONObject rtpParameters = new JSONObject(sendResult.rtpParameters);
 
-            JSONObject object = new JSONObject();
-            object.put("transportId", sendTransport.getId());
-            object.put("kind", "video");
-            object.put("rtpParameters", rtpParameters);
-
-            request("produce", object, new ResponseHandler() {
+            request("produce", new RoomProtocol.ProduceRequest(sendTransport.getId(), MediaKind.VIDEO, rtpParameters), new ResponseHandler() {
                 @Override
                 public void onSuccess(Response resp) {
                     try {
 
-                        JSONObject object = new JSONObject(resp.getData());
-                        String id = object.getString("id");
+                        String id = RoomProtocol.ProduceResponse.fromJson(resp.getData()).id;
 
                         Producer producer = new Producer(id, sendResult.localId, sendResult.rtpSender,
-                                videoMedia, rtpParameters, "video", sendTransport);
+                                videoMedia, rtpParameters, MediaKind.VIDEO.wireValue(), sendTransport);
                         cb.onSuccess(producer);
                         producers.add(producer);
                     } catch(JSONException e) {
@@ -587,7 +538,7 @@ public class RoomClient {
             cb.onError();
             return;
         }
-        if (!device.canProduce("audio")) {
+        if (!device.canProduce(MediaKind.AUDIO.wireValue())) {
             Log.w(TAG, "Device can't produce audio");
             cb.onError();
             return;
@@ -602,27 +553,19 @@ public class RoomClient {
 
         LocalAudioMedia audioMedia = localMediaController.createAudio(muted);
         try {
-            JSONObject codecOptions = new JSONObject();
-            codecOptions.put("opusStereo", true);
-            codecOptions.put("opusDtx", true);
+            JSONObject codecOptions = RoomProtocol.audioCodecOptions(config.getAudioCodec());
 
             List<RtpParameters.Encoding> encodings = new ArrayList<>();
             SendTransport.SendResult sendResult = sendTransport.produce(audioMedia.getTrack(), encodings, codecOptions.toString(), null);
             JSONObject rtpParameters = new JSONObject(sendResult.rtpParameters);
-            JSONObject object = new JSONObject();
-            object.put("transportId", sendTransport.getId());
-            object.put("kind", "audio");
-            object.put("rtpParameters", rtpParameters);
-
-            request("produce", object, new ResponseHandler() {
+            request("produce", new RoomProtocol.ProduceRequest(sendTransport.getId(), MediaKind.AUDIO, rtpParameters), new ResponseHandler() {
                 @Override
                 public void onSuccess(Response resp) {
                     try {
-                        JSONObject object = new JSONObject(resp.getData());
-                        String id = object.getString("id");
+                        String id = RoomProtocol.ProduceResponse.fromJson(resp.getData()).id;
                         Producer producer = new Producer(id, sendResult.localId,
                                 sendResult.rtpSender, audioMedia, rtpParameters,
-                                "audio", sendTransport);
+                                MediaKind.AUDIO.wireValue(), sendTransport);
                         cb.onSuccess(producer);
                         producers.add(producer);
                     } catch(JSONException e) {
@@ -646,9 +589,9 @@ public class RoomClient {
         if (!isInState(RoomSessionState.JOINED) || localMediaController == null) {
             return false;
         }
-        Producer producer = findProducer("video");
+        Producer producer = findProducer(MediaKind.VIDEO);
         for (int i = 0; i < producers.size(); i++) {
-            if (producers.get(i).kind.equals("video")) {
+            if (producers.get(i).kind.equals(MediaKind.VIDEO.wireValue())) {
                 producer = producers.get(i);
                 break;
             }
@@ -664,7 +607,7 @@ public class RoomClient {
         if (!isInState(RoomSessionState.JOINED) || localMediaController == null) {
             return;
         }
-        Producer producer = findProducer("audio");
+        Producer producer = findProducer(MediaKind.AUDIO);
         if (producer != null) {
             localMediaController.setMuted(producer.getLocalMedia(), muted);
         }
@@ -693,7 +636,7 @@ public class RoomClient {
         if (!isInState(RoomSessionState.JOINED)) {
             return;
         }
-        Producer audioProducer = findProducer("audio");
+        Producer audioProducer = findProducer(MediaKind.AUDIO);
         if (audioProducer != null) {
             audioProducer.close();
             closeProducer(audioProducer);
@@ -705,7 +648,7 @@ public class RoomClient {
         if (!isInState(RoomSessionState.JOINED)) {
             return;
         }
-        Producer videoProducer = findProducer("video");
+        Producer videoProducer = findProducer(MediaKind.VIDEO);
         if (videoProducer != null) {
             videoProducer.close();
             closeProducer(videoProducer);
@@ -714,10 +657,10 @@ public class RoomClient {
         }
     }
 
-    private Producer findProducer(String kind) {
+    private Producer findProducer(MediaKind kind) {
         for (int i = 0; i < producers.size(); i++) {
             Producer p = producers.get(i);
-            if (p.kind.equals(kind)) {
+            if (p.kind.equals(kind.wireValue())) {
                 return p;
             }
         }
@@ -755,7 +698,7 @@ public class RoomClient {
                         Consumer consumer = new Consumer(id, recvResult.localId, producerId,
                                 recvResult.rtpReceiver, recvResult.track, rtpParameters,
                                 kind, peerId, recvTransport);
-                        if (consumer.kind.equals("video")) {
+                        if (consumer.kind.equals(MediaKind.VIDEO.wireValue())) {
                             VideoTrack track = (VideoTrack)consumer.getTrack();
                             VideoSink renderer = videoRendererDelegate.createRenderer(consumer.id, false);
                             track.addSink(renderer);
@@ -829,6 +772,10 @@ public class RoomClient {
     }
     private void request(String method, JSONObject data, ResponseHandler handler) {
         request(method, data.toString(), handler);
+    }
+
+    private void request(String method, RoomProtocol.Payload data, ResponseHandler handler) throws JSONException {
+        request(method, data.toJson(), handler);
     }
 
     private void request(String method, String data, ResponseHandler handler) {

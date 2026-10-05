@@ -18,14 +18,12 @@ import org.webrtc.VideoTrack;
 
 final class LocalMediaController {
     private static final String TAG = "LocalMediaController";
-    private static final int VIDEO_WIDTH = 640;
-    private static final int VIDEO_HEIGHT = 480;
-    private static final int VIDEO_FPS = 30;
-
     private final WebRtcRuntime runtime;
+    private final RoomClientConfig.VideoCaptureSpec videoCapture;
 
-    LocalMediaController(WebRtcRuntime runtime) {
+    LocalMediaController(WebRtcRuntime runtime, RoomClientConfig.VideoCaptureSpec videoCapture) {
         this.runtime = runtime;
+        this.videoCapture = videoCapture;
     }
 
     LocalVideoMedia createVideo(Context context, VideoSink sink) {
@@ -44,7 +42,7 @@ final class LocalMediaController {
             return null;
         }
         try {
-            capturer.startCapture(VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS);
+            capturer.startCapture(videoCapture.getWidth(), videoCapture.getHeight(), videoCapture.getFps());
         } catch (RuntimeException e) {
             capturer.dispose();
             track.dispose();
